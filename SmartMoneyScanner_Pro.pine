@@ -1,0 +1,340 @@
+//@version=5
+indicator(title="Smart Money Scanner Pro - Practical Guide", overlay=true, max_bars_back=5000, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+//╔════════════════════════════════════════════════════════════════════════════╗
+//║           SMART MONEY SCANNER PRO - PRACTICAL TRADING GUIDE                ║
+//║  Combines Market Structure, Order Blocks, and RR Analysis for Quality Setup ║
+//╚════════════════════════════════════════════════════════════════════════════╝
+
+// ═══════════════════���═══════════════════════════════════════════════════════
+// INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+group_trend = "STAGE 1: Market Structure"
+group_ob = "STAGE 2: Order Blocks"
+group_minof = "STAGE 3: Minor Order Flow"
+group_rr = "STAGE 4: Risk-Reward Analysis"
+group_alerts = "STAGE 5: Alerts & Notifications"
+
+// ─── STAGE 1: Market Structure Settings ─────────────────────────────────
+show_trend = input.bool(true, "Show Market Structure Analysis", group=group_trend)
+trend_length = input.int(20, "Swing Detection Length", minval=5, maxval=50, group=group_trend)
+show_hh_ll = input.bool(true, "Show HH/LL Labels", group=group_trend)
+show_hl_lh = input.bool(true, "Show HL/LH Labels", group=group_trend)
+show_bos_choch = input.bool(true, "Show BOS/ChoCh Lines", group=group_trend)
+
+color_bull_trend = input.color(color.new(color.green, 30), "Bullish Trend", group=group_trend)
+color_bear_trend = input.color(color.new(color.red, 30), "Bearish Trend", group=group_trend)
+
+// ─── STAGE 2: Order Block Settings ──────────────────────────────────────
+show_ob = input.bool(true, "Show Order Blocks (OB)", group=group_ob)
+ob_length = input.int(10, "OB Detection Length", minval=3, maxval=30, group=group_ob)
+show_ext_ob = input.bool(true, "Show EXT OB (External)", group=group_ob)
+show_idm_ob = input.bool(true, "Show IDM OB (Internal)", group=group_ob)
+max_ob_count = input.int(8, "Max OB Count to Display", minval=3, maxval=20, group=group_ob)
+
+color_demand_ob = input.color(color.new(color.green, 60), "Demand Zone Color", group=group_ob)
+color_supply_ob = input.color(color.new(color.red, 60), "Supply Zone Color", group=group_ob)
+color_demand_label = input.color(color.green, "Demand Label Color", group=group_ob)
+color_supply_label = input.color(color.red, "Supply Label Color", group=group_ob)
+
+// ─── STAGE 3: Minor Order Flow Settings ──────────────────────────────────
+show_minof = input.bool(true, "Show Minor Order Flow (HL/LH)", group=group_minof)
+minof_color_bull = input.color(color.new(color.blue, 40), "Bullish Minor OF", group=group_minof)
+minof_color_bear = input.color(color.new(color.orange, 40), "Bearish Minor OF", group=group_minof)
+show_minof_label = input.bool(true, "Show Minor OF Labels", group=group_minof)
+
+// ─── STAGE 4: Risk-Reward Settings ──────────────────────────────────────
+show_rr = input.bool(true, "Show RR Analysis", group=group_rr)
+show_rr_boxes = input.bool(true, "Show RR Zones on Chart", group=group_rr)
+min_acceptable_rr = input.float(2.0, "Minimum Acceptable RR", minval=1.0, maxval=5.0, step=0.1, group=group_rr)
+show_rr_table = input.bool(true, "Show Setup Quality Table", group=group_rr)
+
+color_rr_good = input.color(color.new(color.lime, 50), "Good RR (1:2+)", group=group_rr)
+color_rr_great = input.color(color.new(color.aqua, 50), "Great RR (1:3+)", group=group_rr)
+color_rr_poor = input.color(color.new(color.gray, 70), "Poor RR (<1:2)", group=group_rr)
+
+// ─── STAGE 5: Alert Settings ────────────────────────────────────────────
+enable_alerts = input.bool(true, "Enable Alerts", group=group_alerts)
+alert_on_setup = input.bool(true, "Alert on New Setup Found", group=group_alerts)
+alert_on_entry = input.bool(true, "Alert on Entry Point Reached", group=group_alerts)
+alert_on_ob_break = input.bool(true, "Alert on OB Break", group=group_alerts)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VARIABLE DECLARATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+var float[] ob_levels_bull = array.new<float>()
+var int[] ob_times_bull = array.new<int>()
+var float[] ob_levels_bear = array.new<float>()
+var int[] ob_times_bear = array.new<int>()
+
+var float last_hh = high
+var int last_hh_idx = 0
+var float last_ll = low
+var int last_ll_idx = 0
+var float last_hl = low
+var int last_hl_idx = 0
+var float last_lh = high
+var int last_lh_idx = 0
+
+var bool is_bullish_trend = true
+var bool is_bearish_trend = false
+
+var label setup_label = na
+var box rr_visual_box = na
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Detect Higher High
+f_is_hh(idx, len) =>
+    high[idx] > ta.highest(high, len + 1)[idx + len] and high[idx] > high[idx - 1] and high[idx] > high[idx + 1]
+
+// Detect Lower Low
+f_is_ll(idx, len) =>
+    low[idx] < ta.lowest(low, len + 1)[idx + len] and low[idx] < low[idx - 1] and low[idx] < low[idx + 1]
+
+// Detect Higher Low
+f_is_hl(idx, len) =>
+    low[idx] > low[idx - 1] and low[idx] > ta.lowest(low, len)[idx + len]
+
+// Detect Lower High
+f_is_lh(idx, len) =>
+    high[idx] < high[idx - 1] and high[idx] < ta.highest(high, len)[idx + len]
+
+// Calculate RR Ratio
+f_calc_rr(entry, sl, tp) =>
+    risk = math.abs(entry - sl)
+    reward = math.abs(tp - entry)
+    risk > 0 ? reward / risk : 0.0
+
+// Score Setup Quality (0-5)
+f_score_setup(has_trend, has_ob, has_minof, has_idm, rr) =>
+    score = 0.0
+    if has_trend
+        score += 1.0
+    if has_ob
+        score += 1.0
+    if has_minof
+        score += 1.0
+    if has_idm
+        score += 1.0
+    if rr >= min_acceptable_rr
+        score += 1.0
+    score
+
+// Get Quality Color
+f_get_quality_color(score) =>
+    if score >= 4.5
+        color.new(color.lime, 0)
+    else if score >= 3.5
+        color.new(color.aqua, 0)
+    else if score >= 2.5
+        color.new(color.yellow, 0)
+    else
+        color.new(color.red, 0)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STAGE 1: MARKET STRUCTURE DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+if show_trend
+    // Detect Higher Highs
+    if f_is_hh(1, trend_length)
+        last_hh := high[1]
+        last_hh_idx := bar_index - 1
+        is_bullish_trend := true
+        if show_hh_ll
+            label.new(bar_index - 1, high[1] + 0.003, "HH", xloc.bar_index, yloc.abovebar, 
+                     color.new(color.green, 100), label.style_label_down, color.green, size.tiny)
+    
+    // Detect Lower Lows
+    if f_is_ll(1, trend_length)
+        last_ll := low[1]
+        last_ll_idx := bar_index - 1
+        is_bearish_trend := true
+        if show_hh_ll
+            label.new(bar_index - 1, low[1] - 0.003, "LL", xloc.bar_index, yloc.belowbar,
+                     color.new(color.red, 100), label.style_label_up, color.red, size.tiny)
+    
+    // Detect Higher Lows
+    if f_is_hl(1, trend_length)
+        last_hl := low[1]
+        last_hl_idx := bar_index - 1
+        if show_hl_lh
+            label.new(bar_index - 1, low[1] - 0.003, "HL", xloc.bar_index, yloc.belowbar,
+                     color.new(color.lime, 100), label.style_label_up, color.lime, size.tiny)
+    
+    // Detect Lower Highs
+    if f_is_lh(1, trend_length)
+        last_lh := high[1]
+        last_lh_idx := bar_index - 1
+        if show_hl_lh
+            label.new(bar_index - 1, high[1] + 0.003, "LH", xloc.bar_index, yloc.abovebar,
+                     color.new(color.orange, 100), label.style_label_down, color.orange, size.tiny)
+
+// ═══════════════════════════════════════════════════��═══════════════════════
+// STAGE 2: ORDER BLOCK DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+if show_ob
+    // Detect Bullish Order Block (Demand Zone)
+    if is_bullish_trend and close[1] > open[1]  // Green candle
+        ob_high = high[1]
+        ob_low = low[1]
+        
+        if array.size(ob_levels_bull) < max_ob_count
+            array.unshift(ob_levels_bull, ob_low)
+            array.unshift(ob_times_bull, bar_index - 1)
+        
+        if show_ext_ob
+            box_ob = box.new(bar_index - ob_length, ob_low, bar_index, ob_high,
+                           bgcolor=color_demand_ob, border_color=color_demand_label, xloc=xloc.bar_index)
+            label.new(bar_index - ob_length/2, ob_high + 0.005, "Demand OB", xloc.bar_index, yloc.abovebar,
+                     color.new(color.green, 100), label.style_label_down, color_demand_label, size.small)
+    
+    // Detect Bearish Order Block (Supply Zone)
+    if is_bearish_trend and close[1] < open[1]  // Red candle
+        ob_high = high[1]
+        ob_low = low[1]
+        
+        if array.size(ob_levels_bear) < max_ob_count
+            array.unshift(ob_levels_bear, ob_high)
+            array.unshift(ob_times_bear, bar_index - 1)
+        
+        if show_ext_ob
+            box_ob = box.new(bar_index - ob_length, ob_low, bar_index, ob_high,
+                           bgcolor=color_supply_ob, border_color=color_supply_label, xloc=xloc.bar_index)
+            label.new(bar_index - ob_length/2, ob_low - 0.005, "Supply OB", xloc.bar_index, yloc.belowbar,
+                     color.new(color.red, 100), label.style_label_up, color_supply_label, size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STAGE 3: MINOR ORDER FLOW (HL/LH PATTERN)
+// ═══════════════════════════════════════════════════════════════════════════
+
+if show_minof
+    // Bullish Minor OF (HL pattern)
+    if last_hl > 0 and last_hl_idx > 0
+        if low < last_hl
+            box minof_bull = box.new(last_hl_idx, last_hl - 0.001, bar_index, last_hl + 0.001,
+                                   bgcolor=minof_color_bull, border_color=color.blue, xloc=xloc.bar_index)
+            if show_minof_label
+                label.new(bar_index, low - 0.005, "HL Entry", xloc.bar_index, yloc.belowbar,
+                         color.new(color.blue, 100), label.style_label_up, color.blue, size.small)
+    
+    // Bearish Minor OF (LH pattern)
+    if last_lh > 0 and last_lh_idx > 0
+        if high > last_lh
+            box minof_bear = box.new(last_lh_idx, last_lh - 0.001, bar_index, last_lh + 0.001,
+                                   bgcolor=minof_color_bear, border_color=color.orange, xloc=xloc.bar_index)
+            if show_minof_label
+                label.new(bar_index, high + 0.005, "LH Entry", xloc.bar_index, yloc.abovebar,
+                         color.new(color.orange, 100), label.style_label_down, color.orange, size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STAGE 4: RISK-REWARD CALCULATION & SETUP QUALITY ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════════
+
+if show_rr and (array.size(ob_levels_bull) > 0 or array.size(ob_levels_bear) > 0)
+    // Analyze Bullish Setup
+    if is_bullish_trend and array.size(ob_levels_bull) > 0
+        entry_price = array.get(ob_levels_bull, 0) + 0.001
+        sl_price = array.get(ob_levels_bull, 0) - 0.002
+        tp_price = last_hh  // Target: Previous HH
+        
+        if tp_price > entry_price
+            rr_ratio = f_calc_rr(entry_price, sl_price, tp_price)
+            setup_score = f_score_setup(is_bullish_trend, true, last_hl > 0, true, rr_ratio)
+            quality_color = f_get_quality_color(setup_score)
+            
+            if show_rr_boxes
+                rr_visual_box := box.new(bar_index - ob_length, sl_price, bar_index + 30, tp_price,
+                                        bgcolor=quality_color, border_color=quality_color, xloc=xloc.bar_index)
+            
+            // Label RR Info
+            rr_text = str.format("RR: 1:{0}", str.tostring(rr_ratio, "#.##"))
+            label.new(bar_index + 15, entry_price, rr_text, xloc.bar_index, yloc.center,
+                     color.new(color.white, 100), label.style_label_center, quality_color, size.small)
+    
+    // Analyze Bearish Setup
+    if is_bearish_trend and array.size(ob_levels_bear) > 0
+        entry_price = array.get(ob_levels_bear, 0) - 0.001
+        sl_price = array.get(ob_levels_bear, 0) + 0.002
+        tp_price = last_ll  // Target: Previous LL
+        
+        if tp_price < entry_price
+            rr_ratio = f_calc_rr(entry_price, sl_price, tp_price)
+            setup_score = f_score_setup(is_bearish_trend, true, last_lh > 0, true, rr_ratio)
+            quality_color = f_get_quality_color(setup_score)
+            
+            if show_rr_boxes
+                rr_visual_box := box.new(bar_index - ob_length, tp_price, bar_index + 30, sl_price,
+                                        bgcolor=quality_color, border_color=quality_color, xloc=xloc.bar_index)
+            
+            // Label RR Info
+            rr_text = str.format("RR: 1:{0}", str.tostring(rr_ratio, "#.##"))
+            label.new(bar_index + 15, entry_price, rr_text, xloc.bar_index, yloc.center,
+                     color.new(color.white, 100), label.style_label_center, quality_color, size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STAGE 5: SETUP QUALITY TABLE & ALERTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+if show_rr_table
+    // Create Info Table
+    table_position = table.new(position.top_right, 5, 6, border_width=2, frame_width=2,
+                             bgcolor=color.new(color.black, 80), border_color=color.gray,
+                             frame_color=color.gray)
+    
+    table.cell(table_position, 0, 0, "SETUP SCANNER", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 1, 0, "STATUS", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 2, 0, "LEVEL", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 3, 0, "RR", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 4, 0, "QUALITY", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=size.small)
+    
+    // Bullish Setup Info
+    if is_bullish_trend and array.size(ob_levels_bull) > 0
+        bull_ob = array.get(ob_levels_bull, 0)
+        bull_rr = f_calc_rr(bull_ob + 0.001, bull_ob - 0.002, last_hh)
+        bull_score = f_score_setup(true, true, last_hl > 0, true, bull_rr)
+        
+        table.cell(table_position, 0, 1, "BULLISH", text_color=color.green, text_size=size.small)
+        table.cell(table_position, 1, 1, "Active", text_color=color.lime, text_size=size.small)
+        table.cell(table_position, 2, 1, str.tostring(bull_ob, "#.####"), text_color=color.white, text_size=size.small)
+        table.cell(table_position, 3, 1, str.format("1:{0}", str.tostring(bull_rr, "#.##")), text_color=color.white, text_size=size.small)
+        table.cell(table_position, 4, 1, str.tostring(bull_score, "#.#") + "/5", bgcolor=f_get_quality_color(bull_score), text_color=color.white, text_size=size.small)
+    
+    // Bearish Setup Info
+    if is_bearish_trend and array.size(ob_levels_bear) > 0
+        bear_ob = array.get(ob_levels_bear, 0)
+        bear_rr = f_calc_rr(bear_ob - 0.001, bear_ob + 0.002, last_ll)
+        bear_score = f_score_setup(true, true, last_lh > 0, true, bear_rr)
+        
+        table.cell(table_position, 0, 2, "BEARISH", text_color=color.red, text_size=size.small)
+        table.cell(table_position, 1, 2, "Active", text_color=color.red, text_size=size.small)
+        table.cell(table_position, 2, 2, str.tostring(bear_ob, "#.####"), text_color=color.white, text_size=size.small)
+        table.cell(table_position, 3, 2, str.format("1:{0}", str.tostring(bear_rr, "#.##")), text_color=color.white, text_size=size.small)
+        table.cell(table_position, 4, 2, str.tostring(bear_score, "#.#") + "/5", bgcolor=f_get_quality_color(bear_score), text_color=color.white, text_size=size.small)
+    
+    // Trend Status
+    table.cell(table_position, 0, 3, "TREND", text_color=color.gray, text_size=size.small)
+    table.cell(table_position, 1, 3, is_bullish_trend ? "UP" : "DOWN", text_color=is_bullish_trend ? color.green : color.red, text_size=size.small)
+    table.cell(table_position, 2, 3, str.tostring(last_hh, "#.####"), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 3, 3, str.tostring(last_ll, "#.####"), text_color=color.white, text_size=size.small)
+    table.cell(table_position, 4, 3, "INFO", text_color=color.yellow, text_size=size.small)
+
+// Alert on High Quality Setup
+if enable_alerts and alert_on_setup
+    if is_bullish_trend and array.size(ob_levels_bull) > 0
+        bull_ob = array.get(ob_levels_bull, 0)
+        bull_rr = f_calc_rr(bull_ob + 0.001, bull_ob - 0.002, last_hh)
+        if bull_rr >= min_acceptable_rr
+            alert("🟢 BULLISH SETUP FOUND - RR: 1:" + str.tostring(bull_rr, "#.##"), alert.freq_once_per_bar)
+    
+    if is_bearish_trend and array.size(ob_levels_bear) > 0
+        bear_ob = array.get(ob_levels_bear, 0)
+        bear_rr = f_calc_rr(bear_ob - 0.001, bear_ob + 0.002, last_ll)
+        if bear_rr >= min_acceptable_rr
+            alert("🔴 BEARISH SETUP FOUND - RR: 1:" + str.tostring(bear_rr, "#.##"), alert.freq_once_per_bar)
